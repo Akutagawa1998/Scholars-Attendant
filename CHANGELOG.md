@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.0] - 2026-07-02
+
+### Compatibility
+- Updated the OpenClaw plugin entry to the current `definePluginEntry` SDK path.
+- Added explicit plugin activation metadata and tool ownership contracts for OpenClaw runtime discovery.
+- Kept `generate_paper_summary` gated to API mode; agent mode and Claude Code workflows remain unchanged.
+
 ## [1.2.0] - 2026-03-31
 
 ### Features

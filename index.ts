@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { parseConfig } from "./src/config.js";
 import {
   createNotionSavePaperTool,
@@ -22,12 +22,12 @@ function resolveNotionToken(): string {
   return process.env.NOTION_API_TOKEN ?? "";
 }
 
-const plugin = {
+const plugin = definePluginEntry({
   id: "paper-collector",
   name: "Paper Collector",
   description: "Auto-detect research/paper URLs and save structured metadata to Notion.",
 
-  register(api: OpenClawPluginApi) {
+  register(api) {
     const config = parseConfig(api.pluginConfig);
     const logger = api.logger;
     const notionToken = resolveNotionToken();
@@ -63,6 +63,6 @@ const plugin = {
       `Paper collector active: databaseId=${config.databaseId || "(not set)"}, mode=${config.mode}`,
     );
   },
-};
+});
 
 export default plugin;

@@ -39,16 +39,19 @@ Each paper gets a comprehensive blog-style summary with TL;DR, verbatim abstract
 git clone https://github.com/Akutagawa1998/Scholars-Attendant.git
 cd Scholars-Attendant
 
-# 2. Install (no build step needed — OpenClaw runs TypeScript via jiti)
+# 2. Install (no build step needed for local development — OpenClaw runs TypeScript via jiti)
 npm install --omit=dev
 
 # 3. Set your Notion API token
 export NOTION_API_TOKEN=ntn_your_token_here
 
 # 4. Register as an OpenClaw plugin
-openclaw plugin add ./path/to/Scholars-Attendant
+openclaw plugins install --link ./path/to/Scholars-Attendant
 
-# 5. Create the Notion database (one-time setup)
+# 5. Verify runtime registration
+openclaw plugins inspect paper-collector --runtime --json
+
+# 6. Create the Notion database (one-time setup)
 #    Share a Notion page with your integration first, then use notion_setup tool
 ```
 
@@ -153,6 +156,15 @@ User sends a paper URL
         v
   Reply to user            <- Title, authors, Notion link, stats
 ```
+
+### OpenClaw Compatibility
+
+This package follows the current OpenClaw native plugin contract:
+
+- `index.ts` exports a `definePluginEntry(...)` entry from `openclaw/plugin-sdk/plugin-entry`.
+- `openclaw.plugin.json` declares `activation.onStartup` and every runtime-owned tool in `contracts.tools`.
+- `generate_paper_summary` remains API-mode only; agent mode keeps the original manual agent workflow.
+- The `claude-code/` adaptation is independent and unchanged by the OpenClaw runtime plugin path.
 
 ## Tools
 
@@ -270,7 +282,7 @@ Sync papers from Notion to your Zotero library. Works with both Claude Code and 
 
 ## Requirements
 
-- Node.js 22+ or Bun
+- Node.js 24+ recommended, or Node.js 22.19+
 - [OpenClaw](https://github.com/openclaw/openclaw) (for plugin mode)
 - [Notion integration token](https://www.notion.so/my-integrations)
 - AI API key (for API mode): Anthropic, OpenAI, Google, or DeepSeek

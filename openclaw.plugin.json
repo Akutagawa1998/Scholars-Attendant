@@ -2,7 +2,37 @@
   "id": "paper-collector",
   "name": "Paper Collector",
   "description": "Auto-detect research/paper URLs in messages, extract metadata, and save to a Notion database.",
+  "version": "1.3.0",
   "skills": ["./skills"],
+  "activation": {
+    "onStartup": true,
+    "onCapabilities": ["tool"]
+  },
+  "contracts": {
+    "tools": [
+      "notion_save_paper",
+      "notion_batch_save",
+      "notion_setup",
+      "extract_page_images",
+      "extract_paper_figures",
+      "notion_write_page",
+      "notion_create_child_page",
+      "generate_paper_summary"
+    ]
+  },
+  "toolMetadata": {
+    "generate_paper_summary": {
+      "configSignals": [
+        {
+          "rootPath": "plugins.entries.paper-collector.config",
+          "mode": {
+            "path": "mode",
+            "allowed": ["api"]
+          }
+        }
+      ]
+    }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
