@@ -80,7 +80,7 @@ def basic(runtime):
     return data, extract_geometry(data, [0], python_executable=runtime)
 
 
-def test_engine_hash_and_declared_coordinate_contract(basic):
+def test_engine_hash_and_declared_coordinate_contract(basic, runtime):
     data, result = basic
     assert result["source_sha256"] == hashlib.sha256(data).hexdigest()
     assert result["engine"]["name"] == "pypdfium2"
@@ -92,7 +92,15 @@ def test_engine_hash_and_declared_coordinate_contract(basic):
     assert page["index_semantics"] == "pdfium_character_index"
     assert page["media_box"] == [10, 20, 210, 320]
     assert page["crop_box"] == [20, 30, 200, 300]
-    assert page["characters"][0]["bbox"] == pytest.approx([50, 250, 58.016, 258.592], abs=0.001)
+    # PDFium substitutes non-embedded Helvetica. Glyph ink bounds depend on
+    # the local font, while explicit page-space translations are invariant.
+    box = page["characters"][0]["bbox"]
+    assert box[:2] == pytest.approx([50, 250], abs=1)
+    shifted = make_pdf(content=b"BT /F1 12 Tf 87 199 Td (A) Tj ET")
+    shifted_page = extract_geometry(shifted, [0], python_executable=runtime)["pages"][0]
+    assert shifted_page["characters"][0]["bbox"] == pytest.approx(
+        [box[0] + 37, box[1] - 51, box[2] + 37, box[3] - 51], abs=0.001,
+    )
     assert page["characters"][0]["text"] == "A"
     assert page["characters"][0]["index_span"] == 1
 
@@ -109,20 +117,27 @@ def test_native_boxes_do_not_rebase_crop_rotate_or_scale_userunit(runtime):
         assert page["characters"][0]["bbox"] == pytest.approx(box)
 
 
-def test_page_tree_metadata_inheritance_is_resolved_without_changing_geometry(runtime):
+def test_page_tree_metadata_inheritance_is_resolved_without_changing_geometry(runtime, basic):
     result = extract_geometry(make_pdf(pages=((90, 1),), inherited=True), [0], python_executable=runtime)
     page = result["pages"][0]
     assert (page["media_box"], page["crop_box"], page["rotation"]) == (
         [10, 20, 210, 320], [20, 30, 200, 300], 90,
     )
-    assert page["characters"][0]["bbox"][0:2] == [50, 250]
+    _, reference = basic
+    expected = reference["pages"][0]["characters"][0]["bbox"]
+    assert page["characters"][0]["bbox"] == pytest.approx(expected, abs=0.001)
 
 
-def test_requested_page_order_and_omitted_zero_area_indexes_are_preserved(runtime):
+def test_requested_page_order_and_omitted_zero_area_indexes_are_preserved(runtime, basic):
     content = b"BT /F1 12 Tf 50 250 Td (A B) Tj 0 -20 Td (C) Tj ET"
     result = extract_geometry(make_pdf(pages=((0, 1), (90, 1)), content=content), [1, 0],
                               python_executable=runtime)
     assert [page["page_index"] for page in result["pages"]] == [1, 0]
+    _, reference = basic
+    a_box = reference["pages"][0]["characters"][0]["bbox"]
+    single_c = make_pdf(content=b"BT /F1 12 Tf 50 250 Td (C) Tj ET")
+    c_page = extract_geometry(single_c, [0], python_executable=runtime)["pages"][0]
+    c_box = c_page["characters"][0]["bbox"]
     for page in result["pages"]:
         assert page["engine_character_count"] == 6
         assert page["skipped_characters"] == {"zero_area": 2, "unmapped_unicode": 0}
@@ -135,8 +150,10 @@ def test_requested_page_order_and_omitted_zero_area_indexes_are_preserved(runtim
                 key: value for key, value in char.items() if key != "bbox"
             }
         pairs = {c["text"]: c["bbox"] for c in page["characters"]}
-        assert pairs["A"][0:2] == [50, 250]
-        assert pairs["C"][0:2] == pytest.approx([50.6, 229.868], abs=0.001)
+        assert pairs["A"] == pytest.approx(a_box, abs=0.001)
+        assert pairs["C"] == pytest.approx(
+            [c_box[0], c_box[1] - 20, c_box[2], c_box[3] - 20], abs=0.001,
+        )
         assert all(c["bbox"][0] < c["bbox"][2] and c["bbox"][1] < c["bbox"][3]
                    for c in page["characters"])
     # Rotation may change engine reading order. The pairings remain correct.
