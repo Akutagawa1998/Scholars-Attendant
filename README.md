@@ -1,292 +1,54 @@
-<p align="center">
-  <img src="docs/images/icon.png" width="120" alt="Scholars-Attendant Icon" />
-</p>
+# Scholars-Attendant (书僮)
 
-<h1 align="center">Scholars-Attendant (书僮)</h1>
+![Scholars-Attendant banner with an illustration of an open book](docs/images/banner.png)
 
-<p align="center">
-  <em>Your research & scientific reading assistant — our loyal servant awaits your command, my liege.</em>
-</p>
+Scholars-Attendant collects research papers, helps you prepare sourced Notion write-ups, and records what you have actually read in a local research library. The core keeps paper versions, source evidence, and reading history distinct.
 
-<p align="center">
-  <img src="docs/images/banner.png" alt="Scholars-Attendant Banner" />
-</p>
+## Try the core
 
-An [OpenClaw](https://github.com/openclaw/openclaw) plugin that automatically detects research paper URLs, extracts structured metadata, and provides a full paper analysis pipeline — from quick saves to richly formatted Notion blog pages.
+This demo uses a temporary SQLite database and synthetic research records. It runs without Notion, Zotero, model credentials, or Docker.
 
-## Showcase
-
-### Paper Archive in Notion
-
-Papers are automatically organized in a Notion database with metadata, tags, conference info, and reading priority:
-
-<p align="center">
-  <img src="docs/images/notion-archive.png" alt="Paper archive in Notion with metadata and reading status" />
-</p>
-
-### Generated Summary with Figures
-
-Each paper gets a comprehensive blog-style summary with TL;DR, verbatim abstract, method analysis with equations, key figures, and references:
-
-<p align="center">
-  <img src="docs/images/summary-with-figures.png" alt="Auto-generated paper summary with figures and equations" />
-</p>
-
-## Quick Start
-
-```bash
-# 1. Clone
+```sh
 git clone https://github.com/Akutagawa1998/Scholars-Attendant.git
 cd Scholars-Attendant
-
-# 2. Install (no build step needed for local development — OpenClaw runs TypeScript via jiti)
-npm install --omit=dev
-
-# 3. Set your Notion API token
-export NOTION_API_TOKEN=ntn_your_token_here
-
-# 4. Register as an OpenClaw plugin
-openclaw plugins install --link ./path/to/Scholars-Attendant
-
-# 5. Verify runtime registration
-openclaw plugins inspect paper-collector --runtime --json
-
-# 6. Create the Notion database (one-time setup)
-#    Share a Notion page with your integration first, then use notion_setup tool
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.lock
+.venv/bin/python -m pip install --no-build-isolation .
+.venv/bin/python evals/run_memory_demo.py
 ```
 
-### Docker Setup
+Use Python 3.12 or later. The demo covers paper import, section-level reading, retrieval with evidence, correction, export, and forgetting. See the [local setup guide](deploy/README.md) for persistent PostgreSQL, the local HTTP service, and stdio MCP.
 
-```yaml
-services:
-  openclaw:
-    environment:
-      NOTION_API_TOKEN: ${NOTION_API_TOKEN}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}  # Required for API mode
-    volumes:
-      - ./path/to/Scholars-Attendant:/app/extensions/paper-collector
-```
+## Collect and write with Codex
 
-### Standalone Usage (without OpenClaw)
+From the checkout, run `bash scripts/install-codex-skills.sh`, then start a fresh Codex session. Connect Notion and select the collection to use. Try asking Codex to save the metadata for a paper link into that collection. Ask for a separate write-up or translation when needed.
 
-```typescript
-import { createExtractPaperFiguresTool } from "./src/notion-tools.js";
+The skills cover paper identification, figures, tables, equations, Notion writing, and shared research context. The [Codex plugin manifest](.codex-plugin/plugin.json) also packages the skills. The reading and memory skills use the core's MCP tools when configured.
 
-// Extract validated figure URLs from any arXiv paper
-const tool = createExtractPaperFiguresTool({ logger: console });
-const result = await tool.execute("call-1", { arxiv_id: "2410.08827" });
-// Returns only figures >=10KB, validated via HEAD request
-```
+## Collect and write with OpenClaw
 
-## Features
+Use OpenClaw 2026.11.4 or later on [a supported runtime](https://docs.openclaw.ai/install/node). From the checkout, use `openclaw plugins install --link .`. Supply `NOTION_API_TOKEN` (or `NOTION_API_TOKEN_FILE`) to the gateway privately. Grant the integration access to a selected Notion page or single-data-source database. Use `notion_setup` to create a new collection under a shared parent, or configure `databaseId` for an existing collection that has the same paper properties. The [OpenClaw install guide](https://docs.openclaw.ai/cli/plugins/install) describes enabling and inspecting the plugin.
 
-- **Multi-platform URL detection**: arXiv, Xiaohongshu, WeChat, X/Twitter, GitHub, and more
-- **Image-based paper inference**: Analyzes screenshots and diagrams to identify papers from social media
-- **Structured metadata extraction**: Title, authors, institutions, summary, contributions, tags
-- **AlphaXiv integration**: Fetch AI-generated structured overviews for arXiv papers
-- **Formula & table parsing**: LaTeX equations with correct formatting and tables with proper structure
-- **Figure extraction with validation**: ar5iv, arXiv HTML, PDF screenshots, with size validation
-- **Blog-style Notion pages**: KaTeX equations, embedded figures, tables, references (Lilian Weng style)
-- **Chinese translation sub-pages**: Full translation as child page (same figures, tables, equations)
-- **Quality gate enforcement**: Rejects content under 40 blocks or with broken/tiny images
-- **Dual execution mode**: API mode (AI API calls) or Agent mode (hosting LLM generates content)
-- **Model selection**: Choose from Anthropic, OpenAI, Google Gemini, or DeepSeek models
-- **Image toggle**: Generate summaries with or without figures
-- **Zotero integration**: Sync papers to Zotero collections with duplicate checking, batch sync, and auto-created subcollections
+- **Agent mode** is the default. `notion_save_paper` looks for an existing record by source or canonical paper URL before saving. `notion_write_page` appends to a selected page or managed block. Use `notion_create_child_page` to keep a long-form write-up separate.
+- **API mode** enables `generate_paper_summary`. Set `mode: "api"`, choose a provider model, and supply the matching API key from [.env.example](.env.example) privately. The tool fetches available arXiv content, sends it to the chosen provider, and creates a new Notion child page under the supplied parent. Set `create_chinese: true` to request a Chinese child page. It uses a separate model call.
+- In Paper Collector 2.0, `clear_existing: true` is a validation error. Keep existing content by selecting a managed block, or use a new child page. The `page_id` accepted by API-mode generation refers to the parent for the new summary.
 
-## Execution Modes
+For existing databases, create the optional `Conference` select and `备注` rich text properties to save those fields. Newly created collections include both properties. To troubleshoot a partial write, inspect the URL or destination ID reported by the tool before retrying.
 
-| Mode | Config | How It Works |
-|------|--------|-------------|
-| **Agent** (default) | `"mode": "agent"` | Hosting LLM agent generates content, calls tools |
-| **API** | `"mode": "api"` | Plugin calls AI APIs directly via `generate_paper_summary` |
+## Synthetic previews
 
-### Model Selection
+These illustrations use fictional titles, reading states, and fixture data. The chart is original to the demo.
 
-Both modes support configurable model selection:
+![Illustration of a synthetic paper collection with three fictional records](docs/images/notion-archive.png)
 
-```json
-{
-  "mode": "api",
-  "model": "claude-sonnet-4-6",
-  "includeImages": true
-}
-```
+![Illustration of a synthetic paper write-up with an original chart counting example reading records by section](docs/images/summary-with-figures.png)
 
-**Available models:**
+## Current scope
 
-| Provider | Models |
-|----------|--------|
-| Anthropic | `claude-opus-4-6`, `claude-sonnet-4-6`, `claude-haiku-4-5-20251001` |
-| OpenAI | `gpt-5.4`, `gpt-4.1`, `gpt-4.1-mini`, `o3`, `o4-mini` |
-| Google | `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.0-flash` |
-| DeepSeek | `deepseek-chat`, `deepseek-reasoner` |
+The core targets an individual local deployment. PostgreSQL is the persistent backend. HTTP is loopback-only by default, and the MCP proxy uses the same service and bearer token. An import establishes a source record. Confirmed reading requires a trusted capture event. Assistants can save proposals when trusted capture is unavailable.
 
-### Image Toggle
+Notion and Zotero sync are explicit operator workflows. Automatic conversation capture, a review scheduler, managed Notion writeback from core memory, and production restore with privacy-ledger replay are outside the current implementation. See the [local setup guide](deploy/README.md) for storage and backup boundaries.
 
-Set `"includeImages": false` to skip figure extraction and generate text-only summaries (faster processing).
+## Contributing and license
 
-## Skills
-
-| Skill | Description |
-|-------|-------------|
-| **paper-collector** | Core workflow: detect paper URLs, extract metadata, save to Notion |
-| **alphaxiv-lookup** | Fetch structured AI-generated paper overviews from alphaxiv.org |
-| **paper-parse** | Extract formulas, symbols, and tables with correct LaTeX formatting |
-| **paper-figures** | Extract and validate paper figures with multi-source fallback |
-| **paper-to-notion** | Convert paper into blog-style Notion page + Chinese translation |
-
-### Workflow
-
-```
-User sends a paper URL
-        |
-        v
-  paper-collector          <- Auto-detect, extract metadata, save to Notion DB
-        |
-        v
-  extract_paper_figures    <- Validate figure URLs (>=10KB, reachable)
-        |                     Fallback: PDF browser screenshots
-        v
-  notion_write_page        <- English blog page (>=40 blocks, validated images)
-        |                     TL;DR, verbatim abstract, method, results, references
-        v
-  notion_create_child_page <- Chinese translation (full mirror, NOT a summary)
-        |
-        v
-  Reply to user            <- Title, authors, Notion link, stats
-```
-
-### OpenClaw Compatibility
-
-This package follows the current OpenClaw native plugin contract:
-
-- `index.ts` exports a `definePluginEntry(...)` entry from `openclaw/plugin-sdk/plugin-entry`.
-- `openclaw.plugin.json` declares `activation.onStartup` and every runtime-owned tool in `contracts.tools`.
-- `generate_paper_summary` remains API-mode only; agent mode keeps the original manual agent workflow.
-- The `claude-code/` adaptation is independent and unchanged by the OpenClaw runtime plugin path.
-
-## Tools
-
-| Tool | Description |
-|------|-------------|
-| `notion_save_paper` | Save paper metadata to Notion |
-| `notion_batch_save` | Batch save with deduplication and rate limiting |
-| `notion_setup` | One-time database creation |
-| `extract_page_images` | Extract image URLs from HTML |
-| `extract_paper_figures` | Validate figure URLs from ar5iv/arXiv HTML |
-| `notion_write_page` | Write blog content with quality gates |
-| `notion_create_child_page` | Create Chinese translation sub-page |
-| `generate_paper_summary` | **(API mode only)** One-step: fetch, generate, write |
-
-## Notion Database Schema
-
-| Property | Type | Description |
-|----------|------|-------------|
-| Title | Title | Paper title |
-| Authors | Rich Text | Author names |
-| Institution | Multi-select | Author affiliations |
-| Published | Date | Publication date |
-| Source URL | URL | Original URL |
-| Paper URL | URL | arXiv/DOI link |
-| Summary | Rich Text | One-sentence summary |
-| Contributions | Rich Text | Main contributions |
-| Tags | Multi-select | Research area tags |
-| Conference | Select | Venue with year |
-| Status | Select | Unread / Reading / Read |
-| Notes | Rich Text | Personal reading notes |
-
-## Project Structure
-
-```
-├── index.ts                  # Plugin entry point — registers tools by mode
-├── openclaw.plugin.json      # Plugin manifest with config schema
-├── package.json
-├── docs/images/              # README images
-├── src/
-│   ├── config.ts             # Configuration parser
-│   ├── types.ts              # Types + AVAILABLE_MODELS registry
-│   ├── ai-client.ts          # Multi-provider AI API client
-│   ├── api-mode-tools.ts     # API mode: generate_paper_summary tool
-│   ├── notion-client.ts      # Notion API wrapper
-│   ├── notion-tools.ts       # Core tool definitions with quality gates
-│   ├── markdown-to-blocks.ts # Markdown to Notion block converter
-│   └── image-extract.ts      # HTML image URL extraction
-└── skills/
-    ├── paper-collector/      # URL detection + metadata extraction
-    ├── alphaxiv-lookup/      # AlphaXiv paper overview
-    ├── paper-parse/          # Formula & table extraction
-    ├── paper-figures/        # Figure extraction + validation
-    └── paper-to-notion/      # Blog-style Notion page generation
-```
-
-## Claude Code Integration
-
-This plugin can also be used with **Claude Code** (Anthropic's CLI for Claude) without OpenClaw. Claude Code uses its native tools (Notion MCP, WebFetch, WebSearch) to replicate the same workflow.
-
-### Quick Start (Claude Code)
-
-1. **Clone this repo and enter the Claude Code directory:**
-   ```bash
-   git clone https://github.com/Akutagawa1998/Scholars-Attendant.git
-   cd Scholars-Attendant/claude-code
-   ```
-
-2. **Start Claude Code in this directory:**
-   ```bash
-   claude
-   ```
-   Claude Code auto-loads `CLAUDE.md` with the full workflow instructions.
-
-3. **Run first-time setup:**
-   ```
-   /paper-setup
-   ```
-
-4. **Collect a paper:**
-   ```
-   /paper https://arxiv.org/abs/2310.07127
-   ```
-
-### Claude Code Tool Mapping
-
-| OpenClaw Tool | Claude Code Equivalent |
-|---|---|
-| `web_fetch` | `WebFetch` |
-| `web_search` | `WebSearch` / Exa `web_search_exa` |
-| `browser` (screenshots) | Not available — use `curl` via Bash + Exa `crawling_exa` |
-| `extract_page_images` | `WebFetch` + parse HTML |
-| `notion_save_paper` | `notion-create-pages` with `data_source_id` |
-| `notion_write_page` | `notion-update-page` with `replace_content` |
-| `notion_create_child_page` | `notion-create-pages` (parent `page_id`) + `notion-update-page` |
-
-### Zotero Integration
-
-Sync papers from Notion to your Zotero library. Works with both Claude Code and OpenClaw.
-
-**Setup:**
-1. Get your API key from https://www.zotero.org/settings/keys (enable library + write access)
-2. Run `/zotero-setup` in Claude Code, or set env vars:
-   ```bash
-   export ZOTERO_API_KEY=your_key_here
-   export ZOTERO_USER_ID=your_user_id
-   ```
-
-**Commands:**
-| Command | Description |
-|---------|-------------|
-| `/zotero-setup` | First-time Zotero API configuration |
-| `/zotero list` | Show all Zotero collections |
-| `/zotero <paper title>` | Save a single paper to Zotero |
-| `/notion-to-zotero <source> -> <collection>` | Batch sync Notion table to Zotero collection |
-
-## Requirements
-
-- Node.js 24+ recommended, or Node.js 22.19+
-- [OpenClaw](https://github.com/openclaw/openclaw) (for plugin mode)
-- [Notion integration token](https://www.notion.so/my-integrations)
-- AI API key (for API mode): Anthropic, OpenAI, Google, or DeepSeek
-
-## License
-
-MIT
+See [CONTRIBUTING.md](CONTRIBUTING.md) for tests and reporting. Code, documentation, and original demo graphics are distributed under the [MIT license](LICENSE).

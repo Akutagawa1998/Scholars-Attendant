@@ -1,4 +1,4 @@
-/** Extract image URLs from raw HTML returned by web_fetch. */
+/** Extract image URLs from raw fetched/opened HTML. */
 
 const IMG_SRC_RE = /<img[^>]+src=["']([^"']+)["'][^>]*>/gi;
 const OG_IMAGE_RE = /<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["'][^>]*>/gi;

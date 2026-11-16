@@ -1,0 +1,8 @@
+include README.md LICENSE CHANGELOG.md requirements.lock
+include deploy/README.md
+include docs/decisions/0001-core-compatibility.md
+recursive-include docs/images *.png
+include evals/run_memory_demo.py evals/fixtures/memory_core.json
+include migrations/README.md CONTRIBUTING.md AGENTS.md
+recursive-include scripts *.py *.sh
+global-exclude __pycache__ *.py[cod] .DS_Store ._*

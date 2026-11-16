@@ -1,6 +1,6 @@
 ---
 name: paper-figures
-description: Extract and save figures/images from research papers. Retrieves paper figures with captions and saves them for use in Notion pages or other outputs. Use when the user wants to collect, view, or save figures from a paper.
+description: Extract and save figures/images from research papers. Retrieves paper figures with captions for Notion pages or other outputs. Use when the user wants to collect, view, save, or embed figures from a paper in Codex or OpenClaw workflows.
 ---
 
 # Paper Figures — Extract & Save Paper Images
@@ -14,20 +14,27 @@ Extract figures, diagrams, and visual content from research papers and save them
 - User wants to understand a paper's architecture/method diagram
 - User asks about a specific figure in a paper
 
+## Codex Tool Compatibility
+
+- Prefer the registered `extract_paper_figures` tool when this repo is running as an OpenClaw plugin.
+- In Codex-only sessions, use Browser screenshots of the PDF, official GitHub figure URLs, arXiv HTML, ar5iv, and Papers With Code/Semantic Scholar figure pages.
+- Use web search/open tools for public pages and Browser for PDFs or blocked pages.
+- Validate that image URLs are real, complete figures. Avoid tiny arXiv HTML fragments.
+
 ## Workflow
 
 ### Step 1: Identify figure sources
 
-For arXiv papers, **always start with the `extract_paper_figures` tool**:
+For arXiv papers, start with `extract_paper_figures` if it is available. If not, use the Codex fallback sources below:
 
-**Source A — `extract_paper_figures` tool** (PREFERRED — programmatic extraction):
+**Source A — `extract_paper_figures` tool** (preferred when registered):
 ```
 extract_paper_figures(arxiv_id="{PAPER_ID}")
 ```
-This tool automatically fetches ar5iv and arXiv HTML pages, extracts all `<img>` tags, validates image sizes (≥10KB), and returns only usable full-size figure URLs. **Use this instead of manually parsing HTML with web_fetch** — web_fetch returns text, not raw HTML, so you cannot see `<img>` tags.
+This tool automatically fetches ar5iv and arXiv HTML pages, extracts all `<img>` tags, validates image sizes (>=10KB), and returns only usable full-size figure URLs.
 
 **Source B — Paper PDF via browser** (MANDATORY when Source A yields < 3 figures):
-1. Use `browser` to navigate to `https://arxiv.org/pdf/{PAPER_ID}`
+1. Use Browser to navigate to `https://arxiv.org/pdf/{PAPER_ID}`
 2. **Page 1-2**: Almost always contains the main figure (architecture/overview diagram). Screenshot it.
 3. **Scroll through the entire PDF**: screenshot every page that contains a figure, diagram, or results table
 4. Key figures to capture:
@@ -35,7 +42,7 @@ This tool automatically fetches ar5iv and arXiv HTML pages, extracts all `<img>`
    - **Results figures**: Bar charts, line plots, comparison tables (usually in Experiments section)
    - **Method diagrams**: Algorithm flowcharts, model architecture details
    - **Ablation figures**: Performance under different settings
-5. Each browser screenshot produces a URL that can be embedded in Notion via `![caption](screenshot_url)`
+5. Each screenshot can be embedded in Notion via `![caption](screenshot_url)` when the browser tool provides a shareable URL; otherwise save or reference the local screenshot path.
 6. **Capture ALL figures in the paper** — match the actual number, not a fixed target. If the paper has 4 figures, get 4. If it has 10, get 10.
 
 **Source C — AlphaXiv** (pre-extracted):
@@ -45,12 +52,12 @@ https://alphaxiv.org/abs/{PAPER_ID}.md
 May contain figure references and descriptions.
 
 **Source D — Semantic Scholar / Papers With Code**:
-Some papers have extracted figures on these platforms. Use `web_search` for `"{paper title}" figures site:paperswithcode.com`.
+Some papers have extracted figures on these platforms. Use web search for `"{paper title}" figures site:paperswithcode.com`.
 
 **Source E — GitHub repository** (often has high-quality figures):
 Many papers have official code repos with figures in a `figures/` or `assets/` directory. Check:
-1. Use `web_search` for `"{paper title}" github` or look for GitHub links on the arXiv abstract page
-2. Fetch the repo's README with `web_fetch` — figures are usually embedded there
+1. Use web search for `"{paper title}" github` or look for GitHub links on the arXiv abstract page
+2. Fetch/open the repo's README — figures are usually embedded there
 3. Figure URLs follow the pattern: `https://github.com/{org}/{repo}/raw/main/figures/{name}.png`
 4. This source is especially useful when arXiv HTML is unavailable (papers before ~2023 or very new papers where HTML hasn't been generated yet)
 
@@ -62,7 +69,7 @@ ar5iv renders LaTeX source to HTML independently from arXiv's own `/html/` endpo
 ```
 https://ar5iv.labs.arxiv.org/html/{PAPER_ID}/assets/{filename}.png
 ```
-Use `web_fetch` to get the page, then extract `<img>` tags. ar5iv figures are generally full-size composites (not fragments).
+Open the page and extract `<img>` tags when raw HTML is available. ar5iv figures are generally full-size composites (not fragments).
 
 **Source priority order**: PDF browser screenshots → GitHub repo → arXiv HTML → ar5iv → Semantic Scholar/PapersWithCode
 
@@ -96,7 +103,7 @@ Provide the figure URLs to the `paper-to-notion` skill for embedding in the Noti
 ```
 
 **Option C — Save to workspace** (when local storage is available):
-Use `exec` to download figures to the workspace:
+Use shell to download figures to the workspace:
 ```bash
 mkdir -p /workspace/papers/{PAPER_ID}/figures
 curl -sL "IMAGE_URL" -o /workspace/papers/{PAPER_ID}/figures/fig1.png
@@ -122,7 +129,7 @@ Format the output as:
 
 The arXiv HTML version (`/html/` endpoint) is the best source for individual figure images:
 
-1. Fetch `https://arxiv.org/html/{PAPER_ID}` with `web_fetch`
+1. Open/fetch `https://arxiv.org/html/{PAPER_ID}`
 2. Look for `<figure>` elements or `<img>` tags with `src` attributes
 3. Figure images typically live at paths like:
    - `https://arxiv.org/html/{PAPER_ID}/extracted/figures/*.png`

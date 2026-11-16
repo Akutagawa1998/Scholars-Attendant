@@ -16,15 +16,16 @@ A clear description of the bug.
 
 ## Environment
 - [ ] OpenClaw
-- [ ] Claude Code
+- [ ] Codex
+- [ ] Python core
 - Platform: macOS / Linux / Windows
 - Python version (if Zotero script):
 
 ## Error Output
 ```
-Paste error messages here
+Paste redacted error messages here
 ```
 
 ## Additional Context
 - Paper URL that failed:
-- Notion page link (if applicable):
+- Synthetic reproducer or public paper link (if applicable):

@@ -21,3 +21,40 @@ Thumbs.db
 # Zotero / Scholars-Attendant credentials
 zotero.json
 config.json
+
+# Research memory core: runtime state belongs outside source control
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+build/
+*.sqlite
+*.sqlite3
+*.db
+*.db-wal
+*.db-shm
+
+# Private instances and export/backup files
+.env.*
+!.env.example
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3-wal
+*.sqlite3-shm
+*.db-journal
+*.sql
+*.dump
+*.backup
+*.sparsebundle/
+*.pdf
+*.epub
+postgres.json
+notion-bundle*.json
+admin-password
+app-password
+runtime/
+backups/
+artifacts/
+downloads/
+.codex/

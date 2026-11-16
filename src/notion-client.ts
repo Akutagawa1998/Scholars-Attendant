@@ -1,7 +1,26 @@
-import type { PaperMetadata, BatchSaveResult } from "./types.js";
+import type { PaperMetadata, BatchSaveResult } from "./types.ts";
 
 const NOTION_API_VERSION = "2022-06-28";
 const NOTION_BASE_URL = "https://api.notion.com/v1";
+const MAX_BLOCKS_PER_REQUEST = 100;
+
+export function validateNotionId(id: unknown): string {
+  const notionId = /^(?:[0-9a-f]{32}|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$/i;
+  if (typeof id !== "string" || !notionId.test(id)) {
+    throw new Error("A valid Notion page, block, or database ID is required");
+  }
+  return id;
+}
+
+async function notionRequest(path: string, token: string, method: "POST" | "PATCH", body: unknown) {
+  return fetch(NOTION_BASE_URL + path, {
+    method,
+    headers: buildHeaders(token),
+    body: JSON.stringify(body),
+    redirect: "error",
+    signal: AbortSignal.timeout(15000),
+  });
+}
 
 function buildHeaders(token: string): Record<string, string> {
   return {
@@ -23,7 +42,7 @@ export async function createDatabase(params: {
   const { token, parentPageId } = params;
 
   const body = {
-    parent: { type: "page_id" as const, page_id: parentPageId },
+    parent: { type: "page_id" as const, page_id: validateNotionId(parentPageId) },
     title: [{ type: "text" as const, text: { content: "Paper Collection" } }],
     properties: {
       Title: { title: {} },
@@ -35,6 +54,8 @@ export async function createDatabase(params: {
       Summary: { rich_text: {} },
       Contributions: { rich_text: {} },
       Tags: { multi_select: {} },
+      Conference: { select: {} },
+      "备注": { rich_text: {} },
       Status: {
         select: {
           options: [
@@ -47,16 +68,8 @@ export async function createDatabase(params: {
     },
   };
 
-  const response = await fetch(`${NOTION_BASE_URL}/databases`, {
-    method: "POST",
-    headers: buildHeaders(token),
-    body: JSON.stringify(body),
-  });
-
-  if (!response.ok) {
-    const errorBody = await response.text().catch(() => "");
-    throw new Error(`Notion API error ${response.status}: ${errorBody.slice(0, 500)}`);
-  }
+  const response = await notionRequest("/databases", token, "POST", body);
+  if (!response.ok) throw new Error(`Notion setup returned HTTP ${response.status}`);
 
   const data = (await response.json()) as { id: string };
   return { databaseId: data.id };
@@ -108,21 +121,40 @@ export async function savePaperToNotion(params: {
     };
   }
 
-  const body = { parent: { database_id: databaseId }, properties };
+  const body = { parent: { database_id: validateNotionId(databaseId) }, properties };
 
-  const response = await fetch(`${NOTION_BASE_URL}/pages`, {
-    method: "POST",
-    headers: buildHeaders(token),
-    body: JSON.stringify(body),
-  });
-
-  if (!response.ok) {
-    const errorBody = await response.text().catch(() => "");
-    throw new Error(`Notion API error ${response.status}: ${errorBody.slice(0, 500)}`);
-  }
+  const response = await notionRequest("/pages", token, "POST", body);
+  if (!response.ok) throw new Error(`Notion save returned HTTP ${response.status}`);
 
   const data = (await response.json()) as { id: string; url: string };
   return { pageId: data.id, url: data.url };
+}
+
+// Serialize lookup and creation per database inside one gateway.
+const pendingPaperWrites = new Map<string, Promise<void>>();
+
+export async function savePaperOnce(params: {
+  token: string;
+  databaseId: string;
+  paper: PaperMetadata;
+}): Promise<{ url: string; pageId?: string; reused: boolean }> {
+  const { token, paper } = params;
+  const databaseId = validateNotionId(params.databaseId);
+  const queueKey = databaseId.replace(/-/g, "").toLowerCase();
+  const prior = pendingPaperWrites.get(queueKey) ?? Promise.resolve();
+  const result = prior.then(async () => {
+    const existing = await findPaper({ token, databaseId, sourceUrl: paper.sourceUrl, paperUrl: paper.paperUrl });
+    if (existing) return { url: existing, reused: true };
+    const saved = await savePaperToNotion({ token, databaseId, paper });
+    return { ...saved, reused: false };
+  });
+  const tail = result.then(() => undefined, () => undefined);
+  pendingPaperWrites.set(queueKey, tail);
+  try {
+    return await result;
+  } finally {
+    if (pendingPaperWrites.get(queueKey) === tail) pendingPaperWrites.delete(queueKey);
+  }
 }
 
 /** Batch save multiple papers with rate limiting and dedup. */
@@ -142,26 +174,13 @@ export async function batchSavePapers(params: {
   };
 
   for (const paper of papers) {
-    // Check for duplicates by source URL
-    if (paper.sourceUrl) {
-      try {
-        const exists = await findBySourceUrl({ token, databaseId, sourceUrl: paper.sourceUrl });
-        if (exists) {
-          result.skipped++;
-          result.results.push({ title: paper.title, status: "duplicate" });
-          continue;
-        }
-      } catch {
-        // Dedup check failed — continue with save attempt
-      }
-    }
-
     try {
-      const saved = await savePaperToNotion({ token, databaseId, paper });
-      result.succeeded++;
+      const saved = await savePaperOnce({ token, databaseId, paper });
+      if (saved.reused) result.skipped++;
+      else result.succeeded++;
       result.results.push({
         title: paper.title,
-        status: "saved",
+        status: saved.reused ? "duplicate" : "saved",
         pageId: saved.pageId,
         url: saved.url,
       });
@@ -183,115 +202,107 @@ export async function batchSavePapers(params: {
   return result;
 }
 
-/** Delete all child blocks of a page (to clear content). */
-export async function clearPageContent(params: {
-  token: string;
-  pageId: string;
-}): Promise<void> {
-  const { token, pageId } = params;
-
-  // List all children
-  let cursor: string | undefined;
-  const blockIds: string[] = [];
-  do {
-    const url = `${NOTION_BASE_URL}/blocks/${pageId}/children?page_size=100${cursor ? `&start_cursor=${cursor}` : ""}`;
-    const res = await fetch(url, { headers: buildHeaders(token) });
-    if (!res.ok) break;
-    const data = (await res.json()) as {
-      results: { id: string }[];
-      has_more: boolean;
-      next_cursor: string | null;
-    };
-    for (const block of data.results) blockIds.push(block.id);
-    cursor = data.has_more ? (data.next_cursor ?? undefined) : undefined;
-  } while (cursor);
-
-  // Delete each block
-  for (const id of blockIds) {
-    await fetch(`${NOTION_BASE_URL}/blocks/${id}`, {
-      method: "DELETE",
-      headers: buildHeaders(token),
-    });
-  }
-}
-
-/** Append blocks to a page (handles 100-block API limit). */
+/** Append to an explicitly selected page or managed block. */
 export async function appendBlocks(params: {
   token: string;
   pageId: string;
   blocks: Record<string, unknown>[];
+  confirmedOffset?: number;
 }): Promise<void> {
-  const { token, pageId, blocks } = params;
-
-  // Notion API limit: 100 blocks per call
-  for (let start = 0; start < blocks.length; start += 100) {
-    const batch = blocks.slice(start, start + 100);
-    const response = await fetch(`${NOTION_BASE_URL}/blocks/${pageId}/children`, {
-      method: "PATCH",
-      headers: buildHeaders(token),
-      body: JSON.stringify({ children: batch }),
-    });
+  const { token, blocks, confirmedOffset = 0 } = params;
+  const pageId = validateNotionId(params.pageId);
+  for (let start = 0; start < blocks.length; start += MAX_BLOCKS_PER_REQUEST) {
+    const confirmed = confirmedOffset + start;
+    const children = blocks.slice(start, start + MAX_BLOCKS_PER_REQUEST);
+    let response;
+    try {
+      response = await notionRequest(`/blocks/${pageId}/children`, token, "PATCH", { children });
+    } catch {
+      throw new Error(`Notion confirmed ${confirmed} blocks. The next batch outcome is uncertain. Check the destination before retrying.`);
+    }
     if (!response.ok) {
-      const errorBody = await response.text().catch(() => "");
-      throw new Error(`Notion append blocks error ${response.status}: ${errorBody.slice(0, 500)}`);
+      throw new Error(`Notion returned HTTP ${response.status} after confirming ${confirmed} blocks. Check the destination before retrying.`);
+    }
+    const receipt = (await response.json().catch(() => null)) as { results?: unknown[] } | null;
+    if (!Array.isArray(receipt?.results) || receipt.results.length !== children.length) {
+      throw new Error(`Notion confirmed ${confirmed} blocks. The latest receipt was incomplete. Check the destination before retrying.`);
+    }
+    if (start + MAX_BLOCKS_PER_REQUEST < blocks.length) {
+      await new Promise((resolve) => setTimeout(resolve, 350));
     }
   }
 }
 
-/** Create a child page under a parent page. */
+/** Write a new child page and report its URL even if a later batch fails. */
 export async function createChildPage(params: {
   token: string;
   parentPageId: string;
   title: string;
   icon?: string;
-}): Promise<{ pageId: string; url: string }> {
-  const { token, parentPageId, title, icon } = params;
-
-  const body: Record<string, unknown> = {
+  blocks: Record<string, unknown>[];
+}): Promise<{ pageId: string; url: string; writeError?: string }> {
+  const { token, title, icon, blocks } = params;
+  const parentPageId = validateNotionId(params.parentPageId);
+  const firstBatch = blocks.slice(0, MAX_BLOCKS_PER_REQUEST);
+  const body = {
     parent: { type: "page_id", page_id: parentPageId },
     properties: {
-      title: [{ type: "text", text: { content: title } }],
+      title: [{ type: "text", text: { content: truncate(title, 500) } }],
     },
+    children: firstBatch,
+    ...(icon ? { icon: { type: "emoji", emoji: icon } } : {}),
   };
-  if (icon) {
-    body.icon = { type: "emoji", emoji: icon };
+
+  let response;
+  try {
+    response = await notionRequest("/pages", token, "POST", body);
+  } catch {
+    throw new Error("Notion page creation outcome is uncertain. Check the parent before retrying.");
   }
-
-  const response = await fetch(`${NOTION_BASE_URL}/pages`, {
-    method: "POST",
-    headers: buildHeaders(token),
-    body: JSON.stringify(body),
-  });
-
   if (!response.ok) {
-    const errorBody = await response.text().catch(() => "");
-    throw new Error(`Notion create page error ${response.status}: ${errorBody.slice(0, 500)}`);
+    throw new Error(`Notion returned HTTP ${response.status} while creating a page. Check the parent before retrying.`);
   }
 
-  const data = (await response.json()) as { id: string; url: string };
-  return { pageId: data.id, url: data.url };
+  let pageId: string;
+  let url: string;
+  try {
+    const data = (await response.json()) as { id: string; url?: string };
+    pageId = validateNotionId(data.id);
+    url = data.url || notionPageUrl(pageId);
+  } catch {
+    throw new Error("Notion did not confirm the new page ID. Check the parent before retrying.");
+  }
+  try {
+    await appendBlocks({ token, pageId, blocks: blocks.slice(firstBatch.length), confirmedOffset: firstBatch.length });
+  } catch (error) {
+    const writeError = error instanceof Error ? error.message : "Check the child page before retrying.";
+    return { pageId, url, writeError };
+  }
+  return { pageId, url };
 }
 
-/** Check for duplicate source URLs in the database. */
-export async function findBySourceUrl(params: {
+export function notionPageUrl(pageId: string): string {
+  return `https://www.notion.so/${validateNotionId(pageId).replace(/-/g, "")}`;
+}
+
+/** Find an existing record before writing, using canonical and original URLs. */
+export async function findPaper(params: {
   token: string;
   databaseId: string;
   sourceUrl: string;
-}): Promise<boolean> {
-  const { token, databaseId, sourceUrl } = params;
-
-  const body = {
-    filter: { property: "Source URL", url: { equals: sourceUrl } },
-    page_size: 1,
-  };
-
-  const response = await fetch(`${NOTION_BASE_URL}/databases/${databaseId}/query`, {
-    method: "POST",
-    headers: buildHeaders(token),
-    body: JSON.stringify(body),
-  });
-
-  if (!response.ok) return false;
-  const data = (await response.json()) as { results: unknown[] };
-  return data.results.length > 0;
+  paperUrl?: string;
+}): Promise<string | undefined> {
+  const { token, sourceUrl, paperUrl } = params;
+  const databaseId = validateNotionId(params.databaseId);
+  const candidates = [...new Set([sourceUrl, paperUrl].filter((url): url is string => Boolean(url)))];
+  if (!candidates.length) throw new Error("A paper URL or source URL is required");
+  const filters = candidates.flatMap((url) => ["Source URL", "Paper URL"].map((property) => ({
+    property, url: { equals: url },
+  })));
+  const body = { filter: { or: filters }, page_size: 1 };
+  const response = await notionRequest(`/databases/${databaseId}/query`, token, "POST", body);
+  if (!response.ok) throw new Error(`Notion lookup returned HTTP ${response.status}; paper was not saved`);
+  const data = (await response.json()) as { results: { id: string; url?: string }[] };
+  const result = data.results[0];
+  return result ? (result.url || notionPageUrl(result.id)) : undefined;
 }

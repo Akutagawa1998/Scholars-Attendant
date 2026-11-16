@@ -1,0 +1,40 @@
+{
+  "name": "scholars-attendant",
+  "version": "0.5.1",
+  "description": "Research paper discovery, summarization, figure extraction, and Notion archiving for Codex.",
+  "author": {
+    "name": "Akutagawa Nagi",
+    "url": "https://github.com/Akutagawa1998"
+  },
+  "homepage": "https://github.com/Akutagawa1998/Scholars-Attendant",
+  "repository": "https://github.com/Akutagawa1998/Scholars-Attendant",
+  "license": "MIT",
+  "keywords": [
+    "research",
+    "papers",
+    "arxiv",
+    "notion",
+    "codex"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Scholars-Attendant",
+    "shortDescription": "Find papers, summarize them, and write to Notion",
+    "longDescription": "A research reading assistant for Codex that identifies papers from URLs, extracts metadata and figures, writes blog-style Notion pages, and creates Chinese translations.",
+    "developerName": "Akutagawa Nagi",
+    "category": "Productivity",
+    "capabilities": [
+      "Research",
+      "Write",
+      "Notion"
+    ],
+    "defaultPrompt": [
+      "Use $paper-collector on this arXiv link and save it to Notion.",
+      "Use $paper-to-notion to write a blog-style page for this paper.",
+      "Use $paper-figures to extract figures from this paper."
+    ],
+    "brandColor": "#275755",
+    "composerIcon": "docs/images/icon.png",
+    "logo": "docs/images/icon.png"
+  }
+}

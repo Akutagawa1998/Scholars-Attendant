@@ -29,7 +29,7 @@ Fetch a structured, machine-readable analysis of any arXiv paper from alphaxiv.o
 
 ### Step 2: Fetch the machine-readable report
 
-Use `web_fetch` on:
+Use Codex web open/fetch tools on:
 
 ```
 https://alphaxiv.org/overview/{PAPER_ID}.md
@@ -56,7 +56,7 @@ If this also returns 404, fall back to the PDF at `https://arxiv.org/pdf/{PAPER_
 - After fetching the overview, you can use `paper-parse` for detailed formula/table extraction
 - Use `paper-figures` to save the paper's figures
 - Use `paper-to-notion` to create a full blog-style Notion page from the paper
-- Use `paper-collector` (notion_save_paper) to save the paper's metadata to the database
+- Use `paper-collector` to save the paper's metadata to the Notion database
 
 ## Error Handling
 

@@ -21,9 +21,9 @@ Extract and render mathematical formulas, symbols, and tables from research pape
 
 Best for: arXiv papers, papers with selectable text, clean LaTeX source.
 
-1. **Try AlphaXiv first** — fetch `https://alphaxiv.org/abs/{PAPER_ID}.md` via `web_fetch`. This often contains pre-extracted equations and tables.
+1. **Try AlphaXiv first** — open/fetch `https://alphaxiv.org/abs/{PAPER_ID}.md`. This often contains pre-extracted equations and tables.
 
-2. **Fetch the PDF as text** — use `web_fetch` on `https://arxiv.org/pdf/{PAPER_ID}` and extract text content.
+2. **Fetch the PDF as text** — open/fetch `https://arxiv.org/pdf/{PAPER_ID}` and extract text content if the tool can read PDFs.
 
 3. **Fetch LaTeX source** (most reliable for equations):
    ```
@@ -41,7 +41,7 @@ Best for: arXiv papers, papers with selectable text, clean LaTeX source.
 
 Best for: non-arXiv papers, scanned PDFs, WeChat/Xiaohongshu posts about papers.
 
-1. **Use the `browser` tool** to open the paper PDF or page
+1. **Use Browser** to open the paper PDF or page
 2. **Screenshot each page** containing equations/tables
 3. **Visually read** the equations from screenshots:
    - Identify each equation number

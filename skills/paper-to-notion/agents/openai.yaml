@@ -1,0 +1,4 @@
+interface:
+  display_name: "Paper to Notion"
+  short_description: "Write blog-style paper pages in Notion"
+  default_prompt: "Use $paper-to-notion to write this paper into Notion."

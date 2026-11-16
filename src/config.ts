@@ -1,9 +1,9 @@
-import type { PaperCollectorConfig } from "./types.js";
+import type { PaperCollectorConfig } from "./types.ts";
 
 const DEFAULTS: PaperCollectorConfig = {
   databaseId: "",
   parentPageId: "",
-  model: "claude-sonnet-4-6",
+  model: "gpt-4.1",
   includeImages: true,
   mode: "agent",
 };

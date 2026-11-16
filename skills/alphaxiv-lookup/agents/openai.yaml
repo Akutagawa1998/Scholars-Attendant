@@ -1,0 +1,4 @@
+interface:
+  display_name: "AlphaXiv Lookup"
+  short_description: "Fetch structured AlphaXiv paper overviews"
+  default_prompt: "Use $alphaxiv-lookup to summarize this arXiv paper from AlphaXiv."

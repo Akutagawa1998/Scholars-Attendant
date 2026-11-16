@@ -29,7 +29,7 @@ export type ModelId = (typeof AVAILABLE_MODELS)[ModelProvider][number];
 export type PaperCollectorConfig = {
   databaseId: string;
   parentPageId: string;
-  /** AI model for generating summaries in API mode (e.g., "claude-sonnet-4-6"). */
+  /** AI model for generating summaries in API mode (e.g., "gpt-4.1"). */
   model: string;
   /** Whether to include figures in blog pages (default: true). */
   includeImages: boolean;

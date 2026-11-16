@@ -1,0 +1,87 @@
+{
+  "fixture_only": true,
+  "schema_version": 1,
+  "description": "Entirely synthetic text and identities for the first memory milestone; never import into a real personal library.",
+  "papers": [
+    {
+      "identity": "fixture:paper-a",
+      "version_identity": "fixture:paper-a:v1",
+      "version": "v1",
+      "title": "Synthetic Study of Collaborative Decision Timing",
+      "authors": ["Fixture Author A"],
+      "source_identity": "fixture:paper-a:v1:source",
+      "sections": [
+        {
+          "section": "abstract",
+          "text": "SYNTHETIC FIXTURE. This invented study compares two assistance policies in a toy collaborative task. It makes no claim about a real experiment. 协作决策测试摘要。"
+        },
+        {
+          "section": "method",
+          "text": "SYNTHETIC FIXTURE. The toy method waits for an explicit task-switch marker before offering assistance. The marker is supplied by the environment; the method does not infer latent human intent. 方法部分用于章节阅读范围测试。"
+        },
+        {
+          "section": "experiments",
+          "text": "SYNTHETIC FIXTURE. In the invented experiment, Policy A uses one assistance turn and Policy B uses two. These values are test data, not research results. 实验部分尚未阅读。"
+        },
+        {
+          "section": "limitations",
+          "text": "SYNTHETIC FIXTURE. An explicit task-switch marker limits the applicability of the toy method to unobserved intent. No real-world generalization was tested."
+        }
+      ]
+    },
+    {
+      "identity": "fixture:paper-a",
+      "version_identity": "fixture:paper-a:v2",
+      "version": "v2",
+      "title": "Synthetic Study of Collaborative Decision Timing",
+      "authors": ["Fixture Author A"],
+      "source_identity": "fixture:paper-a:v2:source",
+      "sections": [
+        {
+          "section": "abstract",
+          "text": "SYNTHETIC FIXTURE V2. This revised toy study changes its task-switch definition. Reading v1 provides no user-reading evidence for v2."
+        },
+        {
+          "section": "method",
+          "text": "SYNTHETIC FIXTURE V2. The revised method requires two consecutive explicit task-switch markers. It remains different from latent-intent inference."
+        },
+        {
+          "section": "experiments",
+          "text": "SYNTHETIC FIXTURE V2. The revised toy experiment has a different setting; v1 evidence must not be cited as this version's results."
+        },
+        {
+          "section": "limitations",
+          "text": "SYNTHETIC FIXTURE V2. Results do not establish performance without explicit environment markers."
+        }
+      ]
+    },
+    {
+      "identity": "fixture:paper-b",
+      "version_identity": "fixture:paper-b:v1",
+      "version": "v1",
+      "title": "Synthetic Study of Collaborative Decision Timing",
+      "authors": ["Fixture Author B"],
+      "source_identity": "fixture:paper-b:v1:source",
+      "sections": [
+        {
+          "section": "abstract",
+          "text": "SYNTHETIC DISTINCT WORK. This unrelated toy paper intentionally shares a title with paper A to test that titles alone never merge identities."
+        },
+        {
+          "section": "method",
+          "text": "SYNTHETIC DISTINCT WORK. This toy method schedules an assistance turn at a fixed interval and uses no task-switch marker."
+        },
+        {
+          "section": "experiments",
+          "text": "SYNTHETIC DISTINCT WORK. No real evaluation is represented by this fixture."
+        },
+        {
+          "section": "limitations",
+          "text": "SYNTHETIC DISTINCT WORK. A fixed schedule is not evidence of latent-intent recognition."
+        }
+      ]
+    }
+  ],
+  "reading_statement": "For synthetic paper A v1, I skimmed the abstract, read the method deeply, and have not read the experiments.",
+  "correction_statement": "Correction: for synthetic paper A v1, I only skimmed the method; my earlier statement that I read it deeply was mistaken."
+}

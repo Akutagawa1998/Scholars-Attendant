@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## Core 0.5.1 / OpenClaw 2.0.0
+
+- Introduced the local Python core, PostgreSQL/pgvector backend, CLI, and stdio MCP proxy.
+- Added synthetic paper collection and evidence demos.
+- Made Notion authoring append to a selected destination or create a child page. API-mode translation is opt-in.
+- Bounded figure requests to public HTTPS destinations and updated the PDF dependency.
+- Updated the public setup and validation paths for Codex, OpenClaw, and the Python core.
+
 ## [1.3.0] - 2026-07-02
 
 ### Compatibility

@@ -1,65 +1,16 @@
-import type { PaperCollectorConfig, PaperMetadata } from "./types.js";
+import type { PaperCollectorConfig, PaperMetadata } from "./types.ts";
 import {
   createDatabase,
-  findBySourceUrl,
-  savePaperToNotion,
+  savePaperOnce,
   batchSavePapers,
-  clearPageContent,
   appendBlocks,
   createChildPage,
-} from "./notion-client.js";
-import { extractImagesFromHtml } from "./image-extract.js";
-import { markdownToBlocks } from "./markdown-to-blocks.js";
-
-/**
- * Validate image URLs: reachable (HEAD) and not tiny fragments (< 10KB).
- * arXiv HTML splits composite figures into sub-images (legends, sub-panels)
- * that are often < 5KB and display as tiny strips in Notion.
- */
-const MIN_IMAGE_BYTES = 10_000; // 10KB — real figures are typically 20KB+
-
-async function validateImageUrls(
-  blocks: Array<Record<string, unknown>>,
-): Promise<{
-  broken: Array<{ url: string; status: number | string }>;
-  tooSmall: Array<{ url: string; bytes: number }>;
-}> {
-  const imageBlocks = blocks.filter((b) => b.type === "image");
-  const broken: Array<{ url: string; status: number | string }> = [];
-  const tooSmall: Array<{ url: string; bytes: number }> = [];
-
-  await Promise.all(
-    imageBlocks.map(async (block) => {
-      const img = block.image as Record<string, unknown> | undefined;
-      const ext = img?.external as Record<string, unknown> | undefined;
-      const url = ext?.url as string | undefined;
-      if (!url) return;
-
-      try {
-        const resp = await fetch(url, {
-          method: "HEAD",
-          redirect: "follow",
-          signal: AbortSignal.timeout(8000),
-        });
-        if (!resp.ok) {
-          broken.push({ url, status: resp.status });
-          return;
-        }
-        const contentLength = Number(resp.headers.get("content-length") || 0);
-        if (contentLength > 0 && contentLength < MIN_IMAGE_BYTES) {
-          tooSmall.push({ url, bytes: contentLength });
-        }
-      } catch (err) {
-        broken.push({
-          url,
-          status: err instanceof Error ? err.message : "fetch failed",
-        });
-      }
-    }),
-  );
-
-  return { broken, tooSmall };
-}
+  validateNotionId,
+} from "./notion-client.ts";
+import { extractImagesFromHtml } from "./image-extract.ts";
+import { prepareNotionContent } from "./notion-content.ts";
+import { arxivIdentifier } from "./public-network.ts";
+import { fetchPaperFigures } from "./paper-sources.ts";
 
 const NotionSavePaperSchema = {
   type: "object" as const,
@@ -106,7 +57,7 @@ const NotionSavePaperSchema = {
     notes: {
       type: "string" as const,
       description:
-        "Personal reading notes or relevance context (e.g., 'Must read — directly motivates our QRR probe'). " +
+        "Personal reading notes or relevance context (e.g., 'Relevant background for the next experiment'). " +
         "Stored in the 备注 column.",
     },
     database_id: {
@@ -144,7 +95,7 @@ export function createNotionSavePaperTool(params: {
     label: "Save Paper to Notion",
     description:
       "Save a research paper's structured metadata to the Notion paper collection database. " +
-      "Use this after extracting paper information from a URL via web_fetch.",
+      "Use this after extracting paper information from a URL via web fetch/open tools.",
     parameters: NotionSavePaperSchema,
     execute: async (_toolCallId: string, rawParams: Record<string, unknown>) => {
       if (!notionToken) {
@@ -174,27 +125,6 @@ export function createNotionSavePaperTool(params: {
 
       const sourceUrl = rawParams.source_url as string;
 
-      // Check for duplicates
-      try {
-        const exists = await findBySourceUrl({
-          token: notionToken,
-          databaseId: dbId,
-          sourceUrl,
-        });
-        if (exists) {
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text: `Paper already exists in database for URL: ${sourceUrl}`,
-              },
-            ],
-          };
-        }
-      } catch (err) {
-        logger.warn(`Duplicate check failed: ${String(err)}`);
-      }
-
       const paper: PaperMetadata = {
         title: rawParams.title as string,
         authors: rawParams.authors as string,
@@ -211,13 +141,12 @@ export function createNotionSavePaperTool(params: {
       };
 
       try {
-        const result = await savePaperToNotion({
-          token: notionToken,
-          databaseId: dbId,
-          paper,
-        });
+        const result = await savePaperOnce({ token: notionToken, databaseId: dbId, paper });
+        if (result.reused) {
+          return { content: [{ type: "text" as const, text: `Paper already exists: ${result.url}` }] };
+        }
 
-        logger.info(`Saved paper "${paper.title}" to Notion: ${result.pageId}`);
+        logger.info("Saved paper metadata to Notion");
 
         return {
           content: [
@@ -229,7 +158,7 @@ export function createNotionSavePaperTool(params: {
         };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        logger.error(`Failed to save paper: ${msg}`);
+        logger.warn("Notion paper save did not complete");
         return {
           content: [
             { type: "text" as const, text: `Failed to save paper to Notion: ${msg}` },
@@ -251,7 +180,7 @@ const NotionBatchSaveSchema = {
       type: "array" as const,
       description:
         "Array of paper objects to save. Each paper has the same fields as notion_save_paper. " +
-        "Duplicates (by source_url) are automatically skipped.",
+        "Existing records are looked up by the source and canonical paper URLs.",
       items: {
         type: "object" as const,
         additionalProperties: false,
@@ -313,7 +242,7 @@ export function createNotionBatchSaveTool(params: {
     label: "Batch Save Papers to Notion",
     description:
       "Save multiple research papers to the Notion database in one call. " +
-      "Automatically deduplicates by source_url and rate-limits API calls. " +
+      "Looks up existing records by their source and canonical paper URLs and rate-limits API calls. " +
       "Use this when adding a reading list, survey papers, or multiple references at once.",
     parameters: NotionBatchSaveSchema,
     execute: async (_toolCallId: string, rawParams: Record<string, unknown>) => {
@@ -397,7 +326,7 @@ export function createNotionBatchSaveTool(params: {
         };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        logger.error(`Batch save failed: ${msg}`);
+        logger.warn("Notion batch save did not complete");
         return {
           content: [
             { type: "text" as const, text: `Batch save failed: ${msg}` },
@@ -473,7 +402,7 @@ export function createNotionSetupTool(params: {
           parentPageId,
         });
 
-        logger.info(`Created Notion database: ${result.databaseId}`);
+        logger.info("Created a Notion collection");
 
         return {
           content: [
@@ -489,7 +418,7 @@ export function createNotionSetupTool(params: {
         };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        logger.error(`Failed to create database: ${msg}`);
+        logger.warn("Notion collection setup did not complete");
         return {
           content: [
             {
@@ -518,7 +447,7 @@ const ExtractPageImagesSchema = {
     html: {
       type: "string" as const,
       description:
-        "Raw HTML content from web_fetch. The tool extracts image URLs from it.",
+        "Raw HTML content from a fetched/opened page. The tool extracts image URLs from it.",
     },
     base_url: {
       type: "string" as const,
@@ -544,10 +473,10 @@ export function createExtractPageImagesTool(params: {
     name: "extract_page_images",
     label: "Extract Images from Page",
     description:
-      "Extract image URLs (og:image, img src, data-src) from HTML returned by web_fetch. " +
+      "Extract image URLs (og:image, img src, data-src) from fetched page HTML. " +
       "Use this when a page lacks paper title/link in text but may contain paper " +
       "figures, architecture diagrams, or screenshots that can identify the paper. " +
-      "Returns image URLs that you can then view with web_fetch or browser to " +
+      "Returns image URLs that you can then view with web/browser tools to " +
       "visually identify the paper.",
     parameters: ExtractPageImagesSchema,
     execute: async (_toolCallId: string, rawParams: Record<string, unknown>) => {
@@ -599,9 +528,9 @@ export function createExtractPageImagesTool(params: {
             text:
               `Found ${images.length} image(s):\n\n${lines.join("\n\n")}\n\n` +
               "Next steps:\n" +
-              "1. Use web_fetch on the image URLs to view them (especially og:image and the first few content images)\n" +
+              "1. Open/fetch the image URLs to view them (especially og:image and the first few content images)\n" +
               "2. Look for: paper titles, author names, arXiv IDs, architecture diagrams, figure captions, method names\n" +
-              "3. Use any identified keywords to web_search for the paper",
+              "3. Use web search with any identified keywords to find the paper",
           },
         ],
       };
@@ -629,7 +558,7 @@ const ExtractPaperFiguresSchema = {
 /**
  * Programmatically extract paper figures from ar5iv/arxiv HTML.
  * This replaces the unreliable pattern of asking the LLM to parse <img> tags
- * from web_fetch output (which returns text, not raw HTML).
+ * from text-only fetch output (which may not expose raw HTML).
  */
 export function createExtractPaperFiguresTool(params: {
   logger: {
@@ -647,114 +576,20 @@ export function createExtractPaperFiguresTool(params: {
       "Extract all figure image URLs from an arXiv paper by programmatically fetching " +
       "ar5iv and arXiv HTML pages and parsing <img> tags. Returns only validated, " +
       "full-size figure URLs (≥10KB). Use this BEFORE writing to Notion — it replaces " +
-      "the manual process of web_fetch + parsing. If this tool returns 0 figures, " +
-      "use the browser tool to screenshot the PDF as a fallback.",
+      "manual page fetching and parsing. If this tool returns 0 figures, " +
+      "use Browser/PDF screenshots as a fallback.",
     parameters: ExtractPaperFiguresSchema,
     execute: async (_toolCallId: string, rawParams: Record<string, unknown>) => {
-      const arxivId = (rawParams.arxiv_id as string).trim();
+      const arxivId = arxivIdentifier(rawParams.arxiv_id);
       if (!arxivId) {
         return {
           content: [
-            { type: "text" as const, text: "Error: arxiv_id is required." },
+            { type: "text" as const, text: "Error: supply a valid arXiv identifier." },
           ],
         };
       }
 
-      const sources = [
-        {
-          name: "ar5iv",
-          url: `https://ar5iv.labs.arxiv.org/html/${arxivId}`,
-          baseUrl: `https://ar5iv.labs.arxiv.org/html/${arxivId}/`,
-        },
-        {
-          name: "arXiv HTML",
-          url: `https://arxiv.org/html/${arxivId}`,
-          baseUrl: `https://arxiv.org/html/${arxivId}/`,
-        },
-      ];
-
-      const allFigures: Array<{
-        url: string;
-        alt: string;
-        source: string;
-        bytes: number;
-      }> = [];
-      const seenUrls = new Set<string>();
-      const errors: string[] = [];
-
-      for (const src of sources) {
-        try {
-          logger.info(`Fetching ${src.name}: ${src.url}`);
-          const resp = await fetch(src.url, {
-            redirect: "follow",
-            signal: AbortSignal.timeout(15000),
-            headers: {
-              "User-Agent":
-                "Mozilla/5.0 (compatible; PaperCollector/1.0; +https://openclaw.ai)",
-            },
-          });
-          if (!resp.ok) {
-            errors.push(`${src.name}: HTTP ${resp.status}`);
-            continue;
-          }
-          const html = await resp.text();
-          if (html.length < 500) {
-            errors.push(`${src.name}: response too short (${html.length} chars)`);
-            continue;
-          }
-
-          // Extract images from raw HTML
-          const images = extractImagesFromHtml(html, {
-            limit: 30,
-            baseUrl: src.baseUrl,
-          });
-          logger.info(
-            `${src.name}: extracted ${images.length} candidate images`,
-          );
-
-          // Validate each image: HEAD request + size check
-          for (const img of images) {
-            if (seenUrls.has(img.url)) continue;
-            seenUrls.add(img.url);
-
-            try {
-              const headResp = await fetch(img.url, {
-                method: "HEAD",
-                redirect: "follow",
-                signal: AbortSignal.timeout(8000),
-              });
-              if (!headResp.ok) continue;
-
-              const contentLength = Number(
-                headResp.headers.get("content-length") || 0,
-              );
-              // Skip tiny fragments (< 10KB) — arXiv HTML splits figures
-              if (contentLength > 0 && contentLength < MIN_IMAGE_BYTES) continue;
-
-              // Accept: either size is unknown (0) or >= 10KB
-              allFigures.push({
-                url: img.url,
-                alt: img.alt,
-                source: src.name,
-                bytes: contentLength,
-              });
-            } catch {
-              // Skip unreachable images
-            }
-          }
-
-          // If we got enough figures from this source, stop
-          if (allFigures.length >= 3) {
-            logger.info(
-              `Found ${allFigures.length} valid figures from ${src.name}, skipping remaining sources`,
-            );
-            break;
-          }
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          errors.push(`${src.name}: ${msg}`);
-        }
-      }
+      const { figures: allFigures, errors } = await fetchPaperFigures(arxivId);
 
       if (allFigures.length === 0) {
         const errSummary =
@@ -768,14 +603,14 @@ export function createExtractPaperFiguresTool(params: {
               type: "text" as const,
               text:
                 `No valid figures found from HTML sources for paper ${arxivId}.${errSummary}\n\n` +
-                `**You MUST use the browser tool to screenshot figures from the PDF:**\n` +
-                `1. browser action=navigate url="https://arxiv.org/pdf/${arxivId}"\n` +
-                `2. browser action=screenshot — capture page 1 (usually has the main figure)\n` +
-                `3. browser action=scroll_down + browser action=screenshot — repeat for every page with a figure\n` +
+                `**Use Browser/PDF screenshots to capture figures from the PDF:**\n` +
+                `1. Navigate to https://arxiv.org/pdf/${arxivId}\n` +
+                `2. Screenshot page 1 (usually has the main figure)\n` +
+                `3. Scroll and screenshot every page with a figure\n` +
                 `4. Use the screenshot URLs as ![Figure N: caption](screenshot_url) in your markdown\n\n` +
                 `Also try:\n` +
-                `- web_search for "{paper title} github" — check repo README for figures\n` +
-                `- web_search for "{paper title} figures site:paperswithcode.com"`,
+                `- Web search for "{paper title} github" and check repo README figures\n` +
+                `- Web search for "{paper title} figures site:paperswithcode.com"`,
             },
           ],
         };
@@ -800,9 +635,8 @@ export function createExtractPaperFiguresTool(params: {
               `Found ${allFigures.length} figure(s) for paper ${arxivId}:\n\n${lines.join("\n\n")}\n\n` +
               `Use these image URLs in your Notion markdown as:\n` +
               `![Fig. N: descriptive caption](url)\n\n` +
-              `If the paper has more figures than found above, supplement with browser PDF screenshots:\n` +
-              `  browser action=navigate url="https://arxiv.org/pdf/${arxivId}"\n` +
-              `  browser action=screenshot`,
+              `If the paper has more figures than found above, supplement with Browser/PDF screenshots:\n` +
+              `  Open https://arxiv.org/pdf/${arxivId} and screenshot pages with figures.`,
           },
         ],
       };
@@ -812,38 +646,31 @@ export function createExtractPaperFiguresTool(params: {
 
 // --- Page content writing tools ---
 
+const MarkdownSchema = {
+  type: "string" as const,
+  description: "Notion-flavored Markdown with headings, equations, tables and verified figures.",
+};
+const IncludeImagesSchema = {
+  type: "boolean" as const,
+  description: "Include verified figures. Defaults to the configured setting.",
+};
 const NotionWritePageSchema = {
   type: "object" as const,
   additionalProperties: false,
   required: ["page_id", "markdown"],
   properties: {
-    page_id: {
-      type: "string" as const,
-      description:
-        "Notion page ID to write content to (the 32-char hex ID from the page URL).",
-    },
-    markdown: {
-      type: "string" as const,
-      description:
-        "Page content in Notion-flavored Markdown. Supports: headings (#/##/###), " +
-        "bold (**), italic (*), inline math ($...$), block equations ($$...$$), " +
-        "images (![caption](url)), tables (<table>), callouts (<callout>), " +
-        "bulleted/numbered lists, dividers (---), and <table_of_contents/>.",
-    },
+    page_id: { type: "string" as const, description: "ID of the selected managed block or page to append to." },
+    markdown: MarkdownSchema,
     clear_existing: {
       type: "boolean" as const,
-      description: "If true, clear existing page content before writing. Default: true.",
+      const: false as const,
+      description: "Legacy compatibility flag. The write only appends blocks.",
     },
-    include_images: {
-      type: "boolean" as const,
-      description:
-        "Whether to include images in the page. When false, image quality gates are skipped " +
-        "and the page can be written without figures. Default: uses plugin config (true).",
-    },
+    include_images: IncludeImagesSchema,
   },
 };
 
-export function createNotionWritePageTool(params: {
+type ContentToolSettings = {
   config: PaperCollectorConfig;
   notionToken: string;
   logger: {
@@ -851,407 +678,80 @@ export function createNotionWritePageTool(params: {
     warn: (msg: string) => void;
     error: (msg: string) => void;
   };
-}) {
-  const { config, notionToken, logger } = params;
+};
 
+function contentResult(text: string) {
+  return { content: [{ type: "text" as const, text }] };
+}
+
+export function createNotionWritePageTool({ config, notionToken, logger }: ContentToolSettings) {
   return {
     name: "notion_write_page",
-    label: "Write Page Content to Notion",
-    description:
-      "Write a blog-style paper summary (headings, equations, figures, tables) to a Notion page. " +
-      "IMPORTANT: This tool REJECTS content shorter than 40 blocks. " +
-      "You MUST include: VERBATIM abstract, VERBATIM introduction, detailed method with equations, " +
-      "complete experiment tables (ALL rows/columns), figures, and ALL references. " +
-      "Tables can use markdown pipe syntax (| col1 | col2 |) or HTML <table> syntax.",
+    label: "Append Notion Content",
+    description: "Append a verified long-form paper write-up to a user-selected managed block or page. Existing blocks are preserved.",
     parameters: NotionWritePageSchema,
     execute: async (_toolCallId: string, rawParams: Record<string, unknown>) => {
-      if (!notionToken) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: "Error: NOTION_API_TOKEN not configured.",
-            },
-          ],
-        };
+      if (!notionToken) return contentResult("Error: NOTION_API_TOKEN is required.");
+      if (rawParams.clear_existing === true) {
+        return contentResult("Error: this tool only appends. Select a managed block or use notion_create_child_page.");
       }
-
-      const pageId = rawParams.page_id as string;
-      const markdown = rawParams.markdown as string;
-      const clearExisting = rawParams.clear_existing !== false; // default true
-      const includeImages = rawParams.include_images !== undefined
-        ? Boolean(rawParams.include_images)
-        : config.includeImages;
-
       try {
-        // Convert markdown to blocks first (for validation)
-        const blocks = markdownToBlocks(markdown);
-
-        // Quality gate: count blocks and images
-        const imageCount = blocks.filter(
-          (b: Record<string, unknown>) => b.type === "image",
-        ).length;
-        const MIN_BLOCKS = 40;
-
-        if (blocks.length < MIN_BLOCKS) {
-          logger.warn(
-            `Quality gate: rejected ${blocks.length} blocks (min ${MIN_BLOCKS}) for page ${pageId}`,
-          );
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text:
-                  `REJECTED: Content too short (${blocks.length} blocks, minimum ${MIN_BLOCKS}). ` +
-                  `A proper blog-style summary needs verbatim abstract, full introduction, detailed method, complete experiment tables, and all references.\n\n` +
-                  `Before calling this tool again, you MUST:\n` +
-                  `1. web_fetch https://alphaxiv.org/overview/{PAPER_ID}.md — structured overview\n` +
-                  `2. web_fetch https://alphaxiv.org/abs/{PAPER_ID}.md — complete table data (every row/column) and full text\n` +
-                  `3. Call extract_paper_figures with the arXiv ID to get figure URLs, then use browser screenshots for any missing figures\n` +
-                  `4. Compose 3000-8000 words with: TL;DR, VERBATIM Abstract, VERBATIM Introduction, Background, Method (equations + figures), Experiments (complete data tables), Discussion, Key Takeaways, ALL References\n\n` +
-                  `Current content has ${imageCount} images. Aim for 3-5 figures from the paper.`,
-              },
-            ],
-          };
-        }
-
-        // Reject content with 0 images unless images are disabled or paper has no figures
-        // Skip this gate entirely when includeImages is false
-        if (includeImages && imageCount === 0) {
-          const mdLower = markdown.toLowerCase();
-          const hasNoFiguresDeclaration =
-            mdLower.includes("no figures") ||
-            mdLower.includes("no images") ||
-            mdLower.includes("does not contain figures") ||
-            mdLower.includes("paper contains no figures") ||
-            mdLower.includes("本文无图");
-          if (hasNoFiguresDeclaration) {
-            logger.warn(
-              `Quality gate: 0 images for page ${pageId} but "no figures" declared — allowing`,
-            );
-          } else {
-            logger.warn(
-              `Quality gate: REJECTED 0 images for page ${pageId} (${blocks.length} blocks)`,
-            );
-            return {
-              content: [
-                {
-                  type: "text" as const,
-                  text:
-                    `REJECTED: Content has 0 images. Most research papers have figures — try to include them.\n\n` +
-                    `Image extraction steps:\n` +
-                    `1. Call extract_paper_figures with the arXiv ID — it programmatically fetches ar5iv/arXiv HTML and extracts validated figure URLs\n` +
-                    `2. If extract_paper_figures returns 0 figures, use the browser tool to open the PDF (https://arxiv.org/pdf/{id}) and take screenshots of each figure\n` +
-                    `3. For GitHub repos linked in the paper, check for figures in README or docs/\n\n` +
-                    `Do NOT try to manually parse HTML from web_fetch — web_fetch returns text, not raw HTML.\n\n` +
-                    `After obtaining figure URLs, insert them as ![Figure N: caption](url) in your markdown and call this tool again.\n\n` +
-                    `If the paper genuinely has no figures (e.g., pure theoretical/position paper), ` +
-                    `add a note in the markdown like "> Note: This paper contains no figures." and call this tool again.`,
-                },
-              ],
-            };
-          }
-        }
-
-        // Validate image URLs — reject if broken or tiny fragments (skip when images disabled)
-        const { broken: brokenImages, tooSmall } = includeImages
-          ? await validateImageUrls(blocks)
-          : { broken: [], tooSmall: [] };
-        if (brokenImages.length > 0) {
-          const brokenList = brokenImages
-            .map((b) => `  - ${b.url} → ${b.status}`)
-            .join("\n");
-          logger.warn(
-            `Quality gate: ${brokenImages.length} broken image URL(s) for page ${pageId}:\n${brokenList}`,
-          );
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text:
-                  `REJECTED: ${brokenImages.length} image URL(s) are broken (404 or unreachable):\n${brokenList}\n\n` +
-                  `DO NOT guess or fabricate image URLs. You must verify each URL exists before using it.\n\n` +
-                  `How to find REAL figure URLs:\n` +
-                  `1. Use browser to screenshot the PDF pages that contain figures (PREFERRED)\n` +
-                  `2. web_fetch the arXiv HTML page and extract ACTUAL <img> src attributes\n` +
-                  `3. web_fetch the GitHub repo README and extract ACTUAL image URLs\n` +
-                  `4. If no real URLs exist, submit content without those figures\n\n` +
-                  `Fix the broken URLs or remove them, then call this tool again.`,
-              },
-            ],
-          };
-        }
-        if (tooSmall.length > 0) {
-          const smallList = tooSmall
-            .map((s) => `  - ${s.url} → ${s.bytes} bytes`)
-            .join("\n");
-          logger.warn(
-            `Quality gate: ${tooSmall.length} tiny image(s) for page ${pageId}:\n${smallList}`,
-          );
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text:
-                  `REJECTED: ${tooSmall.length} image(s) are too small (< 10KB) and are likely arXiv HTML sub-image fragments, not complete figures:\n${smallList}\n\n` +
-                  `arXiv HTML often splits composite figures into tiny sub-images (legends, sub-panels) that display as broken strips in Notion.\n\n` +
-                  `Instead, use the browser tool to screenshot figures directly from the PDF:\n` +
-                  `  browser action=navigate url="https://arxiv.org/pdf/{PAPER_ID}"\n` +
-                  `  browser action=screenshot (capture each page with figures)\n\n` +
-                  `Remove the tiny fragment URLs and replace them with browser screenshots or full-size images, then call this tool again.`,
-              },
-            ],
-          };
-        }
-
-        // Clear existing content if requested
-        if (clearExisting) {
-          await clearPageContent({ token: notionToken, pageId });
-        }
-
-        // Append blocks to page
+        const pageId = validateNotionId(rawParams.page_id);
+        const includeImages = (rawParams.include_images as boolean | undefined) ?? config.includeImages;
+        const { blocks } = await prepareNotionContent(rawParams.markdown, includeImages);
         await appendBlocks({ token: notionToken, pageId, blocks });
-
-        logger.info(`Wrote ${blocks.length} blocks to page ${pageId}`);
-
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Successfully wrote ${blocks.length} content blocks to Notion page.\nPage: https://www.notion.so/${pageId.replace(/-/g, "")}`,
-            },
-          ],
-        };
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        logger.error(`Failed to write page content: ${msg}`);
-        return {
-          content: [
-            { type: "text" as const, text: `Failed to write page content: ${msg}` },
-          ],
-        };
+        logger.info(`Appended ${blocks.length} Notion blocks`);
+        return contentResult(`Appended ${blocks.length} blocks.
+Destination ID: ${pageId}`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Check the destination before retrying.";
+        logger.warn("Notion append did not complete");
+        return contentResult(`Notion append did not complete: ${message}`);
       }
     },
   };
 }
 
-const NotionCreateChildPageSchema = {
+const NotionChildPageSchema = {
   type: "object" as const,
   additionalProperties: false,
   required: ["parent_page_id", "title", "markdown"],
   properties: {
-    parent_page_id: {
-      type: "string" as const,
-      description: "Parent Notion page ID under which to create the child page.",
-    },
-    title: {
-      type: "string" as const,
-      description:
-        "Title of the child page. MUST be the paper's original English title (e.g. 'Machine Unlearning'). " +
-        "Do NOT use generic names like '中文翻译' or 'Chinese Translation'.",
-    },
-    icon: {
-      type: "string" as const,
-      description: "Emoji icon for the page (e.g., '🇨🇳'). Optional.",
-    },
-    markdown: {
-      type: "string" as const,
-      description:
-        "Page content in Notion-flavored Markdown (same format as notion_write_page).",
-    },
-    include_images: {
-      type: "boolean" as const,
-      description:
-        "Whether to require images in the child page. When false, image quality gates are skipped. " +
-        "Default: uses plugin config (true).",
-    },
+    parent_page_id: { type: "string" as const, description: "ID of the selected Notion parent page." },
+    title: { type: "string" as const, description: "Title for the new child page." },
+    icon: { type: "string" as const, description: "Optional single emoji for the page icon." },
+    markdown: MarkdownSchema,
+    include_images: IncludeImagesSchema,
   },
 };
 
-export function createNotionCreateChildPageTool(params: {
-  config: PaperCollectorConfig;
-  notionToken: string;
-  logger: {
-    info: (msg: string) => void;
-    warn: (msg: string) => void;
-    error: (msg: string) => void;
-  };
-}) {
-  const { config, notionToken, logger } = params;
-
+export function createNotionCreateChildPageTool({ config, notionToken, logger }: ContentToolSettings) {
   return {
     name: "notion_create_child_page",
-    label: "Create Child Page in Notion",
-    description:
-      "Create a Chinese translation sub-page under a Notion page. " +
-      "IMPORTANT: title MUST be the paper's original English title (NOT '中文翻译'). " +
-      "This tool REJECTS content shorter than 40 blocks. " +
-      "The Chinese page must be a FULL translation of the English page — same figures, tables, equations, " +
-      "VERBATIM translated abstract and introduction, and ALL references. NOT a short summary.",
-    parameters: NotionCreateChildPageSchema,
+    label: "Create Notion Child Page",
+    description: "Create a new Notion child page for a requested paper write-up or translation.",
+    parameters: NotionChildPageSchema,
     execute: async (_toolCallId: string, rawParams: Record<string, unknown>) => {
-      if (!notionToken) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: "Error: NOTION_API_TOKEN not configured.",
-            },
-          ],
-        };
-      }
-
-      const parentPageId = rawParams.parent_page_id as string;
-      const title = rawParams.title as string;
-      const icon = rawParams.icon as string | undefined;
-      const markdown = rawParams.markdown as string;
-      const includeImages = rawParams.include_images !== undefined
-        ? Boolean(rawParams.include_images)
-        : config.includeImages;
-
+      if (!notionToken) return contentResult("Error: NOTION_API_TOKEN is required.");
       try {
-        // Convert markdown to blocks first (for validation)
-        const blocks = markdownToBlocks(markdown);
-
-        // Quality gate: same minimum as notion_write_page
-        const imageCount = blocks.filter(
-          (b: Record<string, unknown>) => b.type === "image",
-        ).length;
-        const MIN_BLOCKS = 40;
-
-        if (blocks.length < MIN_BLOCKS) {
-          logger.warn(
-            `Quality gate: rejected child page "${title}" with ${blocks.length} blocks (min ${MIN_BLOCKS})`,
-          );
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text:
-                  `REJECTED: Content too short (${blocks.length} blocks, minimum ${MIN_BLOCKS}). ` +
-                  `The Chinese sub-page must be a FULL translation of the English page — ` +
-                  `same sections, same figures (${imageCount} images found), same tables, same equations. ` +
-                  `Abstract and Introduction must be translated VERBATIM (word-for-word). ` +
-                  `All references must be preserved. ` +
-                  `Take the English markdown and translate every paragraph to Chinese while keeping ` +
-                  `all formatting, image URLs, table data, and equations intact.`,
-              },
-            ],
-          };
+        const parentPageId = validateNotionId(rawParams.parent_page_id);
+        const title = rawParams.title;
+        if (typeof title !== "string" || !title.trim()) throw new Error("A child page title is required");
+        const icon = typeof rawParams.icon === "string" ? rawParams.icon : undefined;
+        const includeImages = (rawParams.include_images as boolean | undefined) ?? config.includeImages;
+        const { blocks } = await prepareNotionContent(rawParams.markdown, includeImages);
+        const page = await createChildPage({ token: notionToken, parentPageId, title, icon, blocks });
+        if (page.writeError) {
+          return contentResult(`Child page created with partial content: ${page.url}
+${page.writeError}`);
         }
-
-        // Reject child page with 0 images — must carry over images from English page
-        // Skip when includeImages is false
-        if (includeImages && imageCount === 0) {
-          const mdLower = markdown.toLowerCase();
-          const hasNoFiguresDeclaration =
-            mdLower.includes("no figures") ||
-            mdLower.includes("no images") ||
-            mdLower.includes("does not contain figures") ||
-            mdLower.includes("paper contains no figures") ||
-            mdLower.includes("本文无图");
-          if (hasNoFiguresDeclaration) {
-            logger.warn(
-              `Quality gate: 0 images for child page "${title}" but "no figures" declared — allowing`,
-            );
-          } else {
-            logger.warn(
-              `Quality gate: REJECTED 0 images for child page "${title}" (${blocks.length} blocks)`,
-            );
-            return {
-              content: [
-                {
-                  type: "text" as const,
-                  text:
-                    `REJECTED: Chinese translation has 0 images. Copy all image URLs from the English page.\n\n` +
-                    `If the English page also has no images, use the browser tool to screenshot figures from the PDF first.\n\n` +
-                    `If the paper genuinely has no figures, add a note like "> 注：本文无图" and call this tool again.`,
-                },
-              ],
-            };
-          }
-        }
-
-        // Validate image URLs — reject if broken or tiny fragments (skip when images disabled)
-        const { broken: brokenImages, tooSmall } = includeImages
-          ? await validateImageUrls(blocks)
-          : { broken: [], tooSmall: [] };
-        if (brokenImages.length > 0) {
-          const brokenList = brokenImages
-            .map((b) => `  - ${b.url} → ${b.status}`)
-            .join("\n");
-          logger.warn(
-            `Quality gate: ${brokenImages.length} broken image URL(s) for child page "${title}":\n${brokenList}`,
-          );
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text:
-                  `REJECTED: ${brokenImages.length} image URL(s) are broken:\n${brokenList}\n\n` +
-                  `Use the same verified image URLs from the English page.\n` +
-                  `Fix or remove the broken URLs, then call this tool again.`,
-              },
-            ],
-          };
-        }
-        if (tooSmall.length > 0) {
-          const smallList = tooSmall
-            .map((s) => `  - ${s.url} → ${s.bytes} bytes`)
-            .join("\n");
-          logger.warn(
-            `Quality gate: ${tooSmall.length} tiny image(s) for child page "${title}":\n${smallList}`,
-          );
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text:
-                  `REJECTED: ${tooSmall.length} image(s) are too small (< 10KB) — likely arXiv HTML fragments:\n${smallList}\n\n` +
-                  `Use the same full-size image URLs from the English page, or browser PDF screenshots.\n` +
-                  `Remove tiny fragments and call this tool again.`,
-              },
-            ],
-          };
-        }
-
-        // Create the child page
-        const page = await createChildPage({
-          token: notionToken,
-          parentPageId,
-          title,
-          icon,
-        });
-
-        // Append content
-        if (blocks.length > 0) {
-          await appendBlocks({ token: notionToken, pageId: page.pageId, blocks });
-        }
-
-        logger.info(
-          `Created child page "${title}" (${blocks.length} blocks) under ${parentPageId}`,
-        );
-
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text:
-                `Child page created successfully.\n` +
-                `Title: ${title}\n` +
-                `Blocks: ${blocks.length}\n` +
-                `URL: ${page.url}`,
-            },
-          ],
-        };
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        logger.error(`Failed to create child page: ${msg}`);
-        return {
-          content: [
-            { type: "text" as const, text: `Failed to create child page: ${msg}` },
-          ],
-        };
+        logger.info(`Created a Notion child page with ${blocks.length} blocks`);
+        return contentResult(`Child page created with ${blocks.length} blocks.
+URL: ${page.url}`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Check the parent before retrying.";
+        logger.warn("Notion child page creation did not complete");
+        return contentResult(`Notion child page creation did not complete: ${message}`);
       }
     },
   };

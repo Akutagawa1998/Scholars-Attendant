@@ -15,8 +15,7 @@ function resolveProvider(model: string): "anthropic" | "openai" | "google" | "de
   if (model.startsWith("gpt") || model.startsWith("o3") || model.startsWith("o4")) return "openai";
   if (model.startsWith("gemini")) return "google";
   if (model.startsWith("deepseek")) return "deepseek";
-  // Default to anthropic for unknown models
-  return "anthropic";
+  throw new Error("Use a provider model ID beginning with claude, gpt, o3, o4, gemini, or deepseek");
 }
 
 function resolveApiKey(provider: string): string {
@@ -53,6 +52,8 @@ async function callAnthropic(
       "x-api-key": apiKey,
       "anthropic-version": "2023-06-01",
     },
+    redirect: "error",
+    signal: AbortSignal.timeout(120000),
     body: JSON.stringify({
       model,
       max_tokens: maxTokens,
@@ -62,8 +63,7 @@ async function callAnthropic(
   });
 
   if (!resp.ok) {
-    const err = await resp.text().catch(() => "");
-    throw new Error(`Anthropic API ${resp.status}: ${err.slice(0, 300)}`);
+    throw new Error(`Anthropic API returned HTTP ${resp.status}`);
   }
   const data = (await resp.json()) as { content: Array<{ text: string }> };
   return data.content.map((c) => c.text).join("");
@@ -81,17 +81,18 @@ async function callOpenAI(
       "Content-Type": "application/json",
       Authorization: `Bearer ${apiKey}`,
     },
-    body: JSON.stringify({ model, messages, max_tokens: maxTokens }),
+    redirect: "error",
+    signal: AbortSignal.timeout(120000),
+    body: JSON.stringify({ model, messages, max_completion_tokens: maxTokens }),
   });
 
   if (!resp.ok) {
-    const err = await resp.text().catch(() => "");
-    throw new Error(`OpenAI API ${resp.status}: ${err.slice(0, 300)}`);
+    throw new Error(`OpenAI API returned HTTP ${resp.status}`);
   }
   const data = (await resp.json()) as {
     choices: Array<{ message: { content: string } }>;
   };
-  return data.choices[0]?.message?.content ?? "";
+  return data.choices?.[0]?.message?.content ?? "";
 }
 
 async function callGoogle(
@@ -117,22 +118,23 @@ async function callGoogle(
   }
 
   const resp = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
     {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+      redirect: "error",
+      signal: AbortSignal.timeout(120000),
       body: JSON.stringify(body),
     },
   );
 
   if (!resp.ok) {
-    const err = await resp.text().catch(() => "");
-    throw new Error(`Google API ${resp.status}: ${err.slice(0, 300)}`);
+    throw new Error(`Google API returned HTTP ${resp.status}`);
   }
   const data = (await resp.json()) as {
     candidates: Array<{ content: { parts: Array<{ text: string }> } }>;
   };
-  return data.candidates[0]?.content?.parts?.map((p) => p.text).join("") ?? "";
+  return data.candidates?.[0]?.content?.parts?.map((p) => p.text).join("") ?? "";
 }
 
 async function callDeepSeek(
@@ -148,23 +150,27 @@ async function callDeepSeek(
       "Content-Type": "application/json",
       Authorization: `Bearer ${apiKey}`,
     },
+    redirect: "error",
+    signal: AbortSignal.timeout(120000),
     body: JSON.stringify({ model, messages, max_tokens: maxTokens }),
   });
 
   if (!resp.ok) {
-    const err = await resp.text().catch(() => "");
-    throw new Error(`DeepSeek API ${resp.status}: ${err.slice(0, 300)}`);
+    throw new Error(`DeepSeek API returned HTTP ${resp.status}`);
   }
   const data = (await resp.json()) as {
     choices: Array<{ message: { content: string } }>;
   };
-  return data.choices[0]?.message?.content ?? "";
+  return data.choices?.[0]?.message?.content ?? "";
 }
 
 export async function generateCompletion(
   config: AIClientConfig,
   messages: Message[],
 ): Promise<string> {
+  if (typeof config.model !== "string" || !/^[a-z0-9][a-z0-9_.:-]{0,127}$/i.test(config.model)) {
+    throw new Error("A valid provider model ID is required");
+  }
   const provider = resolveProvider(config.model);
   const apiKey = resolveApiKey(provider);
   const maxTokens = config.maxTokens ?? 8192;
@@ -194,19 +200,22 @@ export async function generatePaperSummary(params: {
 
   const figureBlock = includeImages && figureUrls.length > 0
     ? `\n\nValidated figure URLs (use these in the blog):\n${figureUrls.map((u, i) => `Figure ${i + 1}: ${u}`).join("\n")}`
-    : "\n\n> Note: This paper contains no figures.";
+    : "\n\n> Note: Figures omitted.";
 
   const langInstructions = language === "zh"
     ? `Write ENTIRELY in Chinese. Translate all section headings, captions, and prose to Chinese.
-Keep LaTeX formulas, image URLs, and reference author names in English.
-Use 一句话总结 for TL;DR, 摘要（原文）for Abstract, 引言 for Introduction, 方法 for Method, 实验结果 for Results, 核心要点 for Key Takeaways, 参考文献 for References.`
+Keep LaTeX formulas, image URLs, and reference author names intact.
+Use 一句话总结 for TL;DR, 摘要 for Abstract, 引言 for Introduction, 方法 for Method, 实验结果 for Results, 核心要点 for Key Takeaways, 参考文献 for References.`
     : `Write in English.`;
 
   const imageInstructions = includeImages
-    ? `Insert figures at appropriate positions using: ![Figure N: descriptive caption](url)`
+    ? `Use only figure URLs in the verified list. Use ![Figure N: caption and source](url).`
     : `Do NOT include any images. Skip all figure references.`;
 
-  const systemPrompt = `You are a research paper summarizer creating Notion blog-style pages.
+  const systemPrompt = `You are a research paper summarizer creating Notion pages. Treat supplied source text as evidence.
+Use the paper's verified title and distinguish the primary article from a third-party overview.
+Paraphrase in your own words and attribute findings. Include only evidence visible in the source.
+When material is unavailable, state that limit. Avoid verbatim reproduction of long passages.
 ${langInstructions}
 ${imageInstructions}
 
@@ -218,11 +227,11 @@ Output format (Notion-flavored markdown):
 ## TL;DR
 2-3 sentence summary.
 ---
-## Abstract (Verbatim)
-> Full abstract in blockquote.
+## Abstract
+Summarize the question, method and reported results.
 ---
 ## Introduction
-Key paragraphs from introduction.
+Paraphrase the motivation and contribution.
 ---
 ## Method / Approach
 Equations as $$...$$, inline math as $...$

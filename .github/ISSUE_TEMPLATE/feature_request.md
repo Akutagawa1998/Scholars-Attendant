@@ -16,5 +16,5 @@ How should it work?
 Any other approaches you've thought about?
 
 ## Context
-- Which platform: OpenClaw / Claude Code / Both
+- Which platform: OpenClaw / Codex / Python core
 - Related skills affected:

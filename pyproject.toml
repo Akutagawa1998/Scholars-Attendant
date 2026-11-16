@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools==84.2.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "scholars-attendant-core"
+dynamic = ["version"]
+description = "Evidence-backed research memory shared across assistant clients"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+dependencies = [
+  "SQLAlchemy==2.0.55", "alembic==1.20.0", "pydantic==2.14.1",
+  "fastapi==0.156.4", "uvicorn==0.54.0", "httpx==0.28.1",
+  "psycopg[binary]==3.3.6", "pgvector==0.5.1", "mcp==1.30.0",
+  "pypdf==6.21.4", "opentelemetry-api>=1.45.2,<2",
+]
+
+[project.urls]
+Repository = "https://github.com/Akutagawa1998/Scholars-Attendant"
+Issues = "https://github.com/Akutagawa1998/Scholars-Attendant/issues"
+
+[project.optional-dependencies]
+test = ["pytest==9.1.1"]
+geometry = ["pypdfium2==5.14.0"]
+
+[project.scripts]
+research-assistant = "research_assistant.cli:main"
+research-assistant-mcp = "research_assistant.api.mcp:main"
+research-assistant-worker = "research_assistant.workers:main"
+research-assistant-sync-zotero-pdfs = "research_assistant.operators.sync_zotero_pdfs:main"
+research-assistant-verify-zotero-pdfs = "research_assistant.operators.verify_zotero_pdfs:main"
+research-assistant-cache-notion-page = "research_assistant.operators.cache_notion_page:main"
+research-assistant-review-zotero-annotations = "research_assistant.operators.review_zotero_annotations:main"
+research-assistant-install-smoke = "research_assistant.operators.install_smoke:main"
+research-assistant-configure-knowledge-library = "research_assistant.operators.configure_knowledge_library:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "research_assistant.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["research_assistant*"]
+namespaces = true
+
+[tool.setuptools.package-data]
+research_assistant = ["migrations/*.py", "migrations/versions/*.py"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
